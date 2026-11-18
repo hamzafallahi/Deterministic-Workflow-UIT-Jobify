@@ -1,0 +1,7 @@
+[package]
+name = "fontawesome"
+version = "0.6.0"
+entrypoint = "lib.typ"
+authors = ["Font Awesome Free"]
+license = "CC-BY-4.0"
+description = "Local Font Awesome compatibility package for RenderCV"

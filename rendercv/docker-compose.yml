@@ -1,0 +1,9 @@
+services:
+  rendercv:
+    build: .
+    image: rendercv-app:latest
+    container_name: rendercv_service
+    volumes:
+      - ./cv_data:/app/data
+    # Override entrypoint to keep the container running indefinitely in the background
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]

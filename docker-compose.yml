@@ -1,0 +1,64 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-jobify}
+      POSTGRES_USER: ${POSTGRES_USER:-jobify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-jobify} -d $${POSTGRES_DB:-jobify}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rendercv:
+    build:
+      context: ./rendercv
+    container_name: rendercv_service
+    volumes:
+      - ./cv_data:/app/data
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+
+  app:
+    build: .
+    environment:
+      USER_EMAIL: ${USER_EMAIL:-}
+      EMAIL_APP_PASSWORD: ${EMAIL_APP_PASSWORD:-}
+      POSTGRES_CONNECTION_STRING: ${POSTGRES_CONNECTION_STRING:-postgresql://jobify:change-me@db:5432/jobify}
+      TANITJOBS_BASE_URL: ${TANITJOBS_BASE_URL:-https://www.tanitjobs.com}
+      TANITJOBS_SEARCH_URL: ${TANITJOBS_SEARCH_URL:-https://www.tanitjobs.com/jobs/}
+      SCRAPER_TIMEOUT_SECONDS: ${SCRAPER_TIMEOUT_SECONDS:-20}
+      SCRAPER_MAX_JOBS: ${SCRAPER_MAX_JOBS:-5}
+      SCRAPER_JOBS_PER_KEYWORD: ${SCRAPER_JOBS_PER_KEYWORD:-5}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      CV_DATA_DIR: /app/cv_data
+      RENDERCV_SERVICE: ${RENDERCV_SERVICE:-rendercv_service}
+      MASTER_CV_DIR: ${MASTER_CV_DIR:-/workspace/master_cv}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-r1:7b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-180}
+      CV_CHUNK_SIZE: ${CV_CHUNK_SIZE:-1800}
+      CV_CHUNK_OVERLAP: ${CV_CHUNK_OVERLAP:-250}
+      RETRIEVAL_LIMIT: ${RETRIEVAL_LIMIT:-6}
+      DOCKER_COMPOSE_PROJECT_DIR: /workspace
+    depends_on:
+      db:
+        condition: service_healthy
+      rendercv:
+        condition: service_started
+    volumes:
+      - ./cv_data:/app/cv_data
+      - ./master_cv:/workspace/master_cv:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    working_dir: /app
+
+volumes:
+  postgres_data:
