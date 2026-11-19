@@ -6,8 +6,6 @@ import sys
 
 from .config import settings
 from .cv_ingest import (
-    build_cv_profile,
-    build_rendercv_yaml,
     chunk_text,
     extract_pdf_text,
     find_master_cv,
@@ -164,7 +162,7 @@ def main() -> None:
     relevant_chunks = database.retrieve_chunks(
         ollama.embed(job.description), settings.retrieval_limit
     )
-    cover_letter, _ = ollama.generate_application(
+    cover_letter, rendercv_data = ollama.generate_application(
         {
             "title": job.title,
             "company": job.company,
@@ -172,15 +170,8 @@ def main() -> None:
             "description": job.description,
             "url": job.url,
         },
+        cv_text,
         relevant_chunks,
-    )
-    profile = build_cv_profile(cv_text)
-    rendercv_data = build_rendercv_yaml(
-        profile,
-        {
-            "title": job.title,
-            "company": job.company,
-        },
     )
 
     stem = (

@@ -47,7 +47,7 @@ class Settings:
     cv_data_dir: Path = Path(os.getenv("CV_DATA_DIR", "./cv_data"))
     rendercv_service: str = os.getenv("RENDERCV_SERVICE", "rendercv_service")
     master_cv_dir: Path = Path(os.getenv("MASTER_CV_DIR", "/workspace/master_cv"))
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "deepseek-r1:7b")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
     ollama_embedding_model: str = os.getenv(
         "OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"
     )

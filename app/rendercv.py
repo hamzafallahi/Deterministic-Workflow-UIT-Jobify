@@ -56,6 +56,26 @@ def normalize_rendercv_data(data: dict[str, Any]) -> None:
     cv.setdefault("phone", "")
     cv.setdefault("website", "")
     cv.setdefault("social_networks", [])
+    normalized_social_networks = []
+    allowed_social_networks = {
+        "LinkedIn", "GitHub", "GitLab", "IMDB", "Instagram", "ORCID",
+        "Mastodon", "StackOverflow", "ResearchGate", "YouTube",
+        "Google Scholar", "Telegram", "WhatsApp", "Leetcode", "X",
+        "Bluesky", "Reddit",
+    }
+    for network in cv.get("social_networks", []):
+        if not isinstance(network, dict):
+            continue
+        name = str(network.get("network") or "").strip()
+        username = str(network.get("username") or "").strip()
+        if name == "Portfolio":
+            if username and not cv.get("website"):
+                cv["website"] = username
+            continue
+        if name not in allowed_social_networks or not username:
+            continue
+        normalized_social_networks.append({"network": name, "username": username})
+    cv["social_networks"] = normalized_social_networks
     phone = str(cv.get("phone") or "").strip()
     phone_digits = re.sub(r"\D", "", phone)
     if len(phone_digits) == 8:
@@ -70,7 +90,7 @@ def normalize_rendercv_data(data: dict[str, Any]) -> None:
         sections = {}
         cv["sections"] = sections
 
-    allowed_sections = {"education", "experience", "projects", "skills"}
+    allowed_sections = {"summary", "education", "experience", "projects", "skills"}
     for section_name in list(sections):
         if section_name not in allowed_sections:
             sections.pop(section_name, None)

@@ -16,7 +16,7 @@ class OllamaClient:
     def __init__(
         self,
         base_url: str,
-        model: str = "deepseek-r1:7b",
+        model: str = "qwen3.5:4b",
         embedding_model: str = "nomic-embed-text",
         timeout: int = 180,
     ):
@@ -87,36 +87,51 @@ class OllamaClient:
         self,
         prompt: str,
         max_tokens: int = 400,
-        num_ctx: int = 4096,
+        num_ctx: int = 8192,
         format_response: Any = "json",
         retries: int = 3,
     ) -> dict[str, Any]:
+        last_error: OllamaError | None = None
         for attempt in range(retries):
-            response = self._post(
-                "/api/generate",
-                {
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": format_response,
-                    "think": False,
-                    "options": {
-                        "temperature": 0.05 if attempt == 0 else 0.1,
-                        "num_ctx": num_ctx,
-                        "num_predict": max_tokens,
-                        "repeat_penalty": 1.15,
-                        "repeat_last_n": 64,
-                    },
-                },
-            )
-            text = response.get("response")
-            if not isinstance(text, str):
-                raise OllamaError("Ollama returned an invalid response")
             try:
+                response = self._post(
+                    "/api/generate",
+                    {
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "format": format_response,
+                        "think": False,
+                        "options": {
+                            "temperature": 0.2 if attempt == 0 else 0.3,
+                            "num_ctx": num_ctx,
+                            "num_predict": max_tokens,
+                            "repeat_penalty": 1.15,
+                            "repeat_last_n": 64,
+                        },
+                    },
+                )
+                text = response.get("response")
+                if not isinstance(text, str):
+                    raise OllamaError(
+                        f"Ollama model '{self.model}' returned no text response"
+                    )
+                if not text.strip():
+                    raise OllamaError(
+                        f"Ollama model '{self.model}' returned an empty response "
+                        "(thinking was disabled; check model output and num_ctx)"
+                    )
                 return _parse_json(text)
-            except OllamaError:
+            except OllamaError as exc:
+                last_error = exc
                 if attempt == retries - 1:
-                    raise
+                    raise OllamaError(
+                        f"{exc}. model={self.model}, num_ctx={num_ctx}, "
+                        f"num_predict={max_tokens}"
+                    ) from exc
+        if last_error:
+            raise last_error
+        raise OllamaError("Ollama returned no response")
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         for attempt in range(3):
@@ -184,10 +199,12 @@ class OllamaClient:
         return cleaned[:12]
 
     def generate_application(
-        self, job: dict[str, Any], cv_chunks: list[str]
+        self,
+        job: dict[str, Any],
+        master_cv_text: str,
+        relevant_chunks: list[str] | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        context = "\n\n---\n\n".join(cv_chunks)
-        context = context[:6000]
+        ranked_context = "\n\n---\n\n".join(relevant_chunks or [])
         cover_letter_schema = {
             "type": "object",
             "properties": {
@@ -195,28 +212,145 @@ class OllamaClient:
                     "type": "string",
                     "minLength": 300,
                     "maxLength": 5000,
-                }
+                },
             },
             "required": ["cover_letter"],
             "additionalProperties": False,
         }
-        letter_result = self._json_request(
-            "Write a professional, truthful cover letter using only the supplied CV "
-            "context. Match relevant skills to the job. Do not invent employers, "
-            "degrees, dates, projects, or skills. Write 3-5 substantial paragraphs "
-            "and return only JSON.\n"
-            f"JOB:\n{json.dumps(job, ensure_ascii=False)}\n"
-            f"CV CONTEXT:\n{context}",
-            max_tokens=650,
-            num_ctx=4096,
+        cover_prompt = (
+            "Write a job-tailored professional cover letter.\n"
+            "Requirements:\n"
+            "- Use only facts present in the supplied CV. Do not invent or copy unrelated experience.\n"
+            "- Match relevant skills and achievements to the selected job.\n"
+            "- Prioritize the ranked CV evidence and use the full CV for factual grounding.\n"
+            "- Return only the JSON object required by the schema. Do not include reasoning or markdown.\n"
+            "- The cover letter must be 3-5 substantial paragraphs.\n"
+            f"JOB:\n{json.dumps(job, ensure_ascii=False)}\n\n"
+            "RANKED CV EVIDENCE:\n"
+            f"{ranked_context[:4000]}\n\n"
+            "FULL MASTER CV:\n"
+            f"{master_cv_text[:6000]}"
+        )
+        cover_result = self._json_request(
+            cover_prompt,
+            max_tokens=1400,
+            num_ctx=8192,
             format_response=cover_letter_schema,
             retries=3,
         )
-        cover_letter = letter_result.get("cover_letter")
+        cover_letter = cover_result.get("cover_letter")
         if not isinstance(cover_letter, str) or len(cover_letter.strip()) < 300:
-            raise OllamaError("Ollama returned an empty cover letter")
+            raise OllamaError(
+                f"Ollama model '{self.model}' returned no useful cover letter "
+                "or the cover-letter minimum was not met"
+            )
 
-        return cover_letter.strip(), {}
+        yaml_schema = {
+            "type": "object",
+            "properties": {
+                "cv": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "minLength": 2},
+                        "headline": {"type": "string"},
+                        "location": {"type": "string"},
+                        "email": {"type": "string"},
+                        "phone": {"type": "string"},
+                        "website": {"type": "string"},
+                        "social_networks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "network": {
+                                        "type": "string",
+                                        "enum": [
+                                            "LinkedIn", "GitHub", "GitLab", "StackOverflow",
+                                            "YouTube", "Google Scholar", "ORCID", "X",
+                                        ],
+                                    },
+                                    "username": {"type": "string"},
+                                },
+                                "required": ["network", "username"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "sections": {
+                            "type": "object",
+                            "properties": {
+                                "summary": {"type": "array", "items": {"type": "string"}},
+                                "skills": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": {"type": "string"},
+                                            "details": {"type": "string"},
+                                        },
+                                        "required": ["label", "details"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "experience": {"type": "array", "items": {"type": "object"}},
+                                "education": {"type": "array", "items": {"type": "object"}},
+                                "projects": {"type": "array", "items": {"type": "object"}},
+                            },
+                            "required": ["summary", "skills", "experience", "education", "projects"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": [
+                        "name", "headline", "location", "email", "phone",
+                        "website", "social_networks", "sections",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["cv"],
+            "additionalProperties": False,
+        }
+        yaml_prompt = (
+            "Generate a job-tailored RenderCV YAML object for the selected job.\n"
+            "Use only facts present in the supplied CV. Do not invent employers, degrees, "
+            "dates, projects, achievements, or skills.\n"
+            "Rewrite and reorder the CV for the job; do not return the master CV unchanged.\n"
+            "Put the portfolio URL in cv.website, not in social_networks.\n"
+            "social_networks network values must only be LinkedIn, GitHub, GitLab, "
+            "StackOverflow, YouTube, Google Scholar, ORCID, or X.\n"
+            "Keep complete identity fields from the CV. Experience entries require company "
+            "and position. Education entries require institution and degree. Project entries "
+            "require name.\n"
+            "Return only the JSON object required by the schema. Do not include reasoning or markdown.\n"
+            f"JOB:\n{json.dumps(job, ensure_ascii=False)}\n\n"
+            "RANKED CV EVIDENCE:\n"
+            f"{ranked_context[:4000]}\n\n"
+            "FULL MASTER CV:\n"
+            f"{master_cv_text[:6000]}"
+        )
+        yaml_result = self._json_request(
+            yaml_prompt,
+            max_tokens=4096,
+            num_ctx=8192,
+            format_response=yaml_schema,
+            retries=3,
+        )
+        rendercv_yaml = yaml_result
+        if not isinstance(rendercv_yaml, dict):
+            raise OllamaError(
+                f"Ollama model '{self.model}' returned no RenderCV YAML object"
+            )
+        cv = rendercv_yaml.get("cv")
+        if not isinstance(cv, dict) or not str(cv.get("name") or "").strip():
+            raise OllamaError(
+                f"Ollama model '{self.model}' returned a CV object without cv.name"
+            )
+        sections = cv.get("sections")
+        if not isinstance(sections, dict) or not any(sections.values()):
+            raise OllamaError(
+                f"Ollama model '{self.model}' returned no usable CV sections"
+            )
+        rendercv_yaml.setdefault("design", {"theme": "classic"})
+        return cover_letter.strip(), rendercv_yaml
 
 
 def _extract_master_phone(context: str) -> str:
@@ -384,42 +518,15 @@ ROLE_TITLE_FALLBACKS = [
 
 def _normalize_role_keywords(keywords: list[str], cv_text: str) -> list[str]:
     role_markers = (
-        " developer",
-        " engineer",
-        " consultant",
-        " analyst",
-        " architect",
-        " manager",
-        " administrator",
-        " specialist",
-        " programmer",
-        " lecturer",
-        " teacher",
-        " trainer",
-        " instructor",
-        " advisor",
-        " counsel",
-        " lawyer",
-        " researcher",
-        " researcher",
-        " officer",
-        " coordinator",
-        " assistant",
-        " enseignant",
-        " enseignante",
-        " formatrice",
-        " formateur",
-        " juriste",
-        " avocat",
-        " avocate",
-        " arbitre",
-        " doctorante",
-        " doctorant",
-        " web",
-        " software",
+        " developer", " engineer", " consultant", " analyst", " architect",
+        " manager", " administrator", " specialist", " programmer",
+        " lecturer", " teacher", " trainer", " instructor", " advisor",
+        " counsel", " lawyer", " researcher", " officer", " coordinator",
+        " assistant", " enseignant", " enseignante", " formatrice",
+        " formateur", " juriste", " avocat", " avocate", " arbitre",
+        " doctorante", " doctorant", " web", " software",
     )
     cleaned: list[str] = []
-    cv_lower = cv_text.lower()
     for raw in keywords:
         value = " ".join(raw.strip().split())
         normalized = value.lower().rstrip(".")
@@ -433,57 +540,8 @@ def _normalize_role_keywords(keywords: list[str], cv_text: str) -> list[str]:
         if value not in cleaned:
             cleaned.append(value)
 
-    if "react" in cv_lower or "angular" in cv_lower or "vue" in cv_lower:
-        for title in ("Frontend Developer", "Full Stack Developer", "Web Developer"):
-            if title not in cleaned:
-                cleaned.append(title)
-    if "node" in cv_lower or "spring" in cv_lower or "java" in cv_lower or "python" in cv_lower:
-        for title in ("Software Engineer", "Backend Developer", "Full Stack Developer"):
-            if title not in cleaned:
-                cleaned.append(title)
-    if "sap" in cv_lower:
-        if "SAP Consultant" not in cleaned:
-            cleaned.append("SAP Consultant")
-
-    if any(token in cv_lower for token in ("droit", "juridique", "arbitrage", "juriste")):
-        for title in (
-            "Law Lecturer",
-            "Legal Advisor",
-            "Legal Consultant",
-            "Law Researcher",
-            "Arbitration Consultant",
-        ):
-            if title not in cleaned:
-                cleaned.append(title)
-    if any(token in cv_lower for token in (
-        "enseignante",
-        "enseignant",
-        "formatrice",
-        "formateur",
-        "formation",
-        "training",
-        "soft skills",
-    )):
-        for title in (
-            "Law Lecturer",
-            "Corporate Trainer",
-            "Employability Trainer",
-            "Human Resources Trainer",
-        ):
-            if title not in cleaned:
-                cleaned.append(title)
-
     if not cleaned:
-        fallback_titles = [
-            "Consultant",
-            "Specialist",
-            "Analyst",
-            "Coordinator",
-            "Manager",
-        ]
-        for title in fallback_titles:
-            if title not in cleaned:
-                cleaned.append(title)
+        return []
 
     ordered: list[str] = []
     for title in ROLE_TITLE_FALLBACKS:
