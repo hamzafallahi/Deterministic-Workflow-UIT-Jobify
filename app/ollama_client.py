@@ -184,72 +184,39 @@ class OllamaClient:
         return cleaned[:12]
 
     def generate_application(
-        self, job: dict[str, Any], cv_chunks: list[str], master_cv_text: str
+        self, job: dict[str, Any], cv_chunks: list[str]
     ) -> tuple[str, dict[str, Any]]:
-        retrieved_context = "\n\n---\n\n".join(cv_chunks)
-        source_context = master_cv_text[:12000]
-        response_schema = {
+        context = "\n\n---\n\n".join(cv_chunks)
+        context = context[:6000]
+        cover_letter_schema = {
             "type": "object",
             "properties": {
                 "cover_letter": {
                     "type": "string",
                     "minLength": 300,
                     "maxLength": 5000,
-                },
-                "rendercv_yaml": {
-                    "type": "object",
-                    "properties": {
-                        "cv": {"type": "object"},
-                        "design": {"type": "object"},
-                    },
-                    "required": ["cv"],
-                    "additionalProperties": True,
-                },
+                }
             },
-            "required": ["cover_letter", "rendercv_yaml"],
+            "required": ["cover_letter"],
             "additionalProperties": False,
         }
-        result = self._json_request(
-            "Create a tailored job application from the source CV and job description. "
-            "Return JSON with exactly two fields: cover_letter and rendercv_yaml.\n\n"
-            "COVER LETTER RULES:\n"
-            "- Write 3-5 substantial professional paragraphs.\n"
-            "- Use only facts supported by the source CV.\n"
-            "- Do not invent employers, degrees, dates, projects, skills, or metrics.\n\n"
-            "RENDERCV YAML RULES:\n"
-            "- Return a RenderCV data object with a top-level cv object.\n"
-            "- Tailor the CV to this job: change the headline, reorder sections and "
-            "entries, select the most relevant experience and projects, and rewrite "
-            "their summaries/highlights to emphasize requirements in the job.\n"
-            "- Keep only truthful evidence from the source CV. Do not add facts that "
-            "are absent from it.\n"
-            "- Keep the candidate's real identity, contact details, education, and "
-            "dates unless they are absent from the source.\n"
-            "- Use only cv.sections.education, experience, projects, and skills. "
-            "Education entries require institution and area. Experience entries "
-            "require company and position. Project entries require name. Skills "
-            "entries require label and details.\n"
-            "- Do not return Markdown fences, explanations, or a YAML string; "
-            "rendercv_yaml must be a JSON object.\n\n"
+        letter_result = self._json_request(
+            "Write a professional, truthful cover letter using only the supplied CV "
+            "context. Match relevant skills to the job. Do not invent employers, "
+            "degrees, dates, projects, or skills. Write 3-5 substantial paragraphs "
+            "and return only JSON.\n"
             f"JOB:\n{json.dumps(job, ensure_ascii=False)}\n"
-            f"RETRIEVED RELEVANT CV EVIDENCE:\n{retrieved_context[:7000]}\n"
-            f"FULL SOURCE CV:\n{source_context}",
-            max_tokens=2200,
-            num_ctx=8192,
-            format_response=response_schema,
+            f"CV CONTEXT:\n{context}",
+            max_tokens=650,
+            num_ctx=4096,
+            format_response=cover_letter_schema,
             retries=3,
         )
-        cover_letter = result.get("cover_letter")
+        cover_letter = letter_result.get("cover_letter")
         if not isinstance(cover_letter, str) or len(cover_letter.strip()) < 300:
             raise OllamaError("Ollama returned an empty cover letter")
-        rendercv_yaml = result.get("rendercv_yaml")
-        if not isinstance(rendercv_yaml, dict) or not isinstance(
-            rendercv_yaml.get("cv"), dict
-        ):
-            raise OllamaError("Ollama returned an invalid RenderCV document")
-        _apply_deterministic_cv_identity(rendercv_yaml, master_cv_text)
 
-        return cover_letter.strip(), rendercv_yaml
+        return cover_letter.strip(), {}
 
 
 def _extract_master_phone(context: str) -> str:

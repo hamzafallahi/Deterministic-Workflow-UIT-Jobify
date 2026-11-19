@@ -60,19 +60,16 @@ Given a CV PDF and a running Ollama/PostgreSQL/RenderCV environment, Jobify:
 12. Embeds the selected job description and performs cosine-similarity
     retrieval against the stored CV chunks.
 13. Sends the retrieved evidence to DeepSeek to generate a cover letter.
-14. asks DeepSeek to build a job-tailored RenderCV YAML from the full stored CV
-    and retrieved evidence.
+14. Builds the RenderCV YAML deterministically from the full CV profile.
 15. Saves the YAML and cover letter in `cv_data`.
 16. Invokes the RenderCV container and verifies the PDF.
 17. Displays the letter and asks for explicit permission before SMTP delivery.
 
-DeepSeek now generates both application artifacts in one structured response:
-the cover letter and a job-tailored RenderCV YAML. The prompt requires it to
-select and reorder relevant experience, projects, and skills, and to rewrite
-their summaries around the selected job while using only evidence from the
-stored CV. Deterministic code remains a safety boundary: it restores verified
-identity/contact data and sanitizes dates, sections, and required RenderCV
-fields before rendering.
+The important design change is that the LLM no longer generates the complete
+CV YAML. The deterministic parser builds the profile, while the LLM is used
+for role extraction and the cover letter. This prevents hallucinated phone
+numbers, invalid education fields, unsupported RenderCV sections, and invented
+experience from degrading the CV.
 
 ## 3. File responsibilities and call graph
 
@@ -100,8 +97,8 @@ main()
 ├── database.save_jobs()
 ├── database.retrieve_chunks(ollama.embed(job.description), k)
 ├── ollama.generate_application()
-├── build_cv_profile()
-│   └── app/cv_ingest.py (available for deterministic profile extraction)
+├── build_cv_profile() / build_rendercv_yaml()
+│   └── app/cv_ingest.py
 ├── save_yaml() / render_yaml()
 │   └── app/rendercv.py
 └── send_application()
@@ -307,7 +304,7 @@ PostgreSQL: ORDER BY embedding <=> query_vector LIMIT 6
 relevant CV chunks
         |
         v
-ollama.generate_application(job, relevant_chunks, master_cv_text)
+ollama.generate_application(job, relevant_chunks)
         |
         v
 cover letter
@@ -319,13 +316,10 @@ This is a classic `Retrieve -> Augment -> Generate` chain:
 - **Augment:** those chunks are inserted into the cover-letter prompt.
 - **Generate:** DeepSeek writes a letter grounded in that context.
 
-DeepSeek receives both the full normalized CV text stored in `cv_metadata` and
-the top retrieved chunks. The retrieved chunks focus the model on the strongest
-job matches, while the full CV allows it to preserve factual identity, dates,
-and evidence that may not be in the top six chunks. DeepSeek then generates
-both the letter and the tailored YAML. The deterministic normalizer is applied
-after generation only to enforce the RenderCV schema and protect factual
-contact details.
+The deterministic RenderCV YAML is intentionally built from the full stored CV
+profile, not only retrieved chunks. This is not a failure of RAG: retrieval
+is used for the job-specific letter, while the complete factual CV is used to
+avoid deleting unrelated but valid CV sections.
 
 The current system does not return chunk IDs or source citations in the cover
 letter. That is acceptable for an application letter but is a gap relative to
@@ -356,10 +350,9 @@ tool selected by the LLM. The Python workflow calls it directly.
 
 ## 9. RenderCV generation and the previous failures
 
-DeepSeek constructs the RenderCV data structure as part of
-`generate_application()`. `save_yaml()` then calls
-`normalize_rendercv_data()` before writing YAML. Normalization is validation
-and safety cleanup; it is not the tailoring step.
+`build_rendercv_yaml()` constructs a RenderCV data structure from the
+deterministic profile. `save_yaml()` then calls
+`normalize_rendercv_data()` before writing YAML.
 
 RenderCV normalization:
 
@@ -390,9 +383,8 @@ producing different invalid YAML structures on different prompts:
 - singular `section`;
 - unsupported `design` or section structures.
 
-The current design separates responsibilities: DeepSeek performs the
-job-specific selection and rewriting, while deterministic code prevents an
-invalid or unsafe model response from reaching RenderCV.
+Moving CV construction from the LLM to deterministic code addresses the root
+cause instead of trying to repair every possible hallucinated YAML shape.
 
 ## 10. Email flow and safety
 
@@ -626,8 +618,7 @@ The highest-value additions, in order, are:
 8. Demonstrate the five required agent interactions.
 9. Improve `find_master_cv()` so stored-CV reuse can work even when no current
    PDF is present.
-10. Keep the deterministic RenderCV normalizer as the safety boundary while
-    allowing DeepSeek to perform the job-specific CV tailoring.
+10. Keep the current deterministic RenderCV builder as the safety boundary.
 
 ## 14. Suggested presentation explanation
 
