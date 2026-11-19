@@ -22,6 +22,18 @@ def _int_env(name: str, default: int) -> int:
     return parsed
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
 @dataclass(frozen=True)
 class Settings:
     ollama_base_url: str = os.getenv(
@@ -42,6 +54,8 @@ class Settings:
     scraper_timeout_seconds: int = _int_env("SCRAPER_TIMEOUT_SECONDS", 20)
     scraper_max_jobs: int = _int_env("SCRAPER_MAX_JOBS", 10)
     scraper_jobs_per_keyword: int = _int_env("SCRAPER_JOBS_PER_KEYWORD", 5)
+    scraper_verify_tls: bool = _bool_env("SCRAPER_VERIFY_TLS", True)
+    scraper_ca_bundle_path: str = os.getenv("SCRAPER_CA_BUNDLE_PATH", "").strip()
     smtp_host: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port: int = _int_env("SMTP_PORT", 587)
     cv_data_dir: Path = Path(os.getenv("CV_DATA_DIR", "./cv_data"))

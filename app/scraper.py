@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from email.utils import parseaddr
 import logging
+from pathlib import Path
 import re
 from typing import Iterable
 from time import time
@@ -55,6 +56,22 @@ class TanitjobsScraper:
                 "Accept-Language": "en-US,en;q=0.8,fr;q=0.6",
             }
         )
+        self.verify_tls: bool | str
+        if not settings.scraper_verify_tls:
+            LOGGER.warning(
+                "SCRAPER_VERIFY_TLS is disabled; HTTPS certificate validation is off."
+            )
+            self.verify_tls = False
+        elif settings.scraper_ca_bundle_path:
+            ca_bundle = Path(settings.scraper_ca_bundle_path)
+            if not ca_bundle.exists():
+                raise ScraperError(
+                    "SCRAPER_CA_BUNDLE_PATH does not exist: "
+                    f"{settings.scraper_ca_bundle_path}"
+                )
+            self.verify_tls = str(ca_bundle)
+        else:
+            self.verify_tls = True
 
     def search(self, keywords: Iterable[str], limit: int | None = None) -> list[JobPosting]:
         """Return postings for one search phrase."""
@@ -119,7 +136,18 @@ class TanitjobsScraper:
 
     def _get(self, url: str, *, params: dict[str, str] | None = None) -> requests.Response:
         try:
-            response = self.session.get(url, params=params, timeout=self.timeout_seconds)
+            response = self.session.get(
+                url,
+                params=params,
+                timeout=self.timeout_seconds,
+                verify=self.verify_tls,
+            )
+        except requests.exceptions.SSLError as exc:
+            raise ScraperError(
+                "TLS certificate verification failed while fetching Tanitjobs. "
+                "If your network intercepts HTTPS, set SCRAPER_CA_BUNDLE_PATH "
+                "to a trusted CA bundle path inside the container."
+            ) from exc
         except requests.RequestException as exc:
             raise ScraperError(f"Unable to fetch Tanitjobs page: {url}") from exc
         if response.status_code == 429:
