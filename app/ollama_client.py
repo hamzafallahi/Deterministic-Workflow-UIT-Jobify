@@ -161,10 +161,11 @@ class OllamaClient:
         result = self._json_request(
             "Extract target job titles from this CV. Return JSON with exactly "
             'one field: {"keywords":["..."]}. The values must be 3-12 concise '
-            "job-search titles, such as Software Engineer, Full Stack Developer, "
-            "Backend Developer, Frontend Developer, SAP Consultant, IT Consultant, "
-            "or Web Developer. Do not return technologies, frameworks, tools, "
-            "databases, products, or domains alone. Do not return generic words "
+            "job-search titles, using titles that fit the candidate's actual field. "
+            "Examples include Software Engineer, Full Stack Developer, SAP Consultant, "
+            "Law Lecturer, Legal Advisor, Corporate Trainer, Data Analyst, or "
+            "Human Resources Specialist. Do not return technologies, frameworks, tools, "
+            "databases, products, certificates, or domains alone. Do not return generic words "
             "or explanations. Derive titles from the candidate's actual experience "
             "and target roles.\n"
             f"CV:\n{cv_excerpt}",
@@ -183,39 +184,72 @@ class OllamaClient:
         return cleaned[:12]
 
     def generate_application(
-        self, job: dict[str, Any], cv_chunks: list[str]
+        self, job: dict[str, Any], cv_chunks: list[str], master_cv_text: str
     ) -> tuple[str, dict[str, Any]]:
-        context = "\n\n---\n\n".join(cv_chunks)
-        context = context[:6000]
-        cover_letter_schema = {
+        retrieved_context = "\n\n---\n\n".join(cv_chunks)
+        source_context = master_cv_text[:12000]
+        response_schema = {
             "type": "object",
             "properties": {
                 "cover_letter": {
                     "type": "string",
                     "minLength": 300,
                     "maxLength": 5000,
-                }
+                },
+                "rendercv_yaml": {
+                    "type": "object",
+                    "properties": {
+                        "cv": {"type": "object"},
+                        "design": {"type": "object"},
+                    },
+                    "required": ["cv"],
+                    "additionalProperties": True,
+                },
             },
-            "required": ["cover_letter"],
+            "required": ["cover_letter", "rendercv_yaml"],
             "additionalProperties": False,
         }
-        letter_result = self._json_request(
-            "Write a professional, truthful cover letter using only the supplied CV "
-            "context. Match relevant skills to the job. Do not invent employers, "
-            "degrees, dates, projects, or skills. Write 3-5 substantial paragraphs "
-            "and return only JSON.\n"
+        result = self._json_request(
+            "Create a tailored job application from the source CV and job description. "
+            "Return JSON with exactly two fields: cover_letter and rendercv_yaml.\n\n"
+            "COVER LETTER RULES:\n"
+            "- Write 3-5 substantial professional paragraphs.\n"
+            "- Use only facts supported by the source CV.\n"
+            "- Do not invent employers, degrees, dates, projects, skills, or metrics.\n\n"
+            "RENDERCV YAML RULES:\n"
+            "- Return a RenderCV data object with a top-level cv object.\n"
+            "- Tailor the CV to this job: change the headline, reorder sections and "
+            "entries, select the most relevant experience and projects, and rewrite "
+            "their summaries/highlights to emphasize requirements in the job.\n"
+            "- Keep only truthful evidence from the source CV. Do not add facts that "
+            "are absent from it.\n"
+            "- Keep the candidate's real identity, contact details, education, and "
+            "dates unless they are absent from the source.\n"
+            "- Use only cv.sections.education, experience, projects, and skills. "
+            "Education entries require institution and area. Experience entries "
+            "require company and position. Project entries require name. Skills "
+            "entries require label and details.\n"
+            "- Do not return Markdown fences, explanations, or a YAML string; "
+            "rendercv_yaml must be a JSON object.\n\n"
             f"JOB:\n{json.dumps(job, ensure_ascii=False)}\n"
-            f"CV CONTEXT:\n{context}",
-            max_tokens=650,
-            num_ctx=4096,
-            format_response=cover_letter_schema,
+            f"RETRIEVED RELEVANT CV EVIDENCE:\n{retrieved_context[:7000]}\n"
+            f"FULL SOURCE CV:\n{source_context}",
+            max_tokens=2200,
+            num_ctx=8192,
+            format_response=response_schema,
             retries=3,
         )
-        cover_letter = letter_result.get("cover_letter")
+        cover_letter = result.get("cover_letter")
         if not isinstance(cover_letter, str) or len(cover_letter.strip()) < 300:
             raise OllamaError("Ollama returned an empty cover letter")
+        rendercv_yaml = result.get("rendercv_yaml")
+        if not isinstance(rendercv_yaml, dict) or not isinstance(
+            rendercv_yaml.get("cv"), dict
+        ):
+            raise OllamaError("Ollama returned an invalid RenderCV document")
+        _apply_deterministic_cv_identity(rendercv_yaml, master_cv_text)
 
-        return cover_letter.strip(), {}
+        return cover_letter.strip(), rendercv_yaml
 
 
 def _extract_master_phone(context: str) -> str:
@@ -392,6 +426,28 @@ def _normalize_role_keywords(keywords: list[str], cv_text: str) -> list[str]:
         " administrator",
         " specialist",
         " programmer",
+        " lecturer",
+        " teacher",
+        " trainer",
+        " instructor",
+        " advisor",
+        " counsel",
+        " lawyer",
+        " researcher",
+        " researcher",
+        " officer",
+        " coordinator",
+        " assistant",
+        " enseignant",
+        " enseignante",
+        " formatrice",
+        " formateur",
+        " juriste",
+        " avocat",
+        " avocate",
+        " arbitre",
+        " doctorante",
+        " doctorant",
         " web",
         " software",
     )
@@ -422,6 +478,46 @@ def _normalize_role_keywords(keywords: list[str], cv_text: str) -> list[str]:
         if "SAP Consultant" not in cleaned:
             cleaned.append("SAP Consultant")
 
+    if any(token in cv_lower for token in ("droit", "juridique", "arbitrage", "juriste")):
+        for title in (
+            "Law Lecturer",
+            "Legal Advisor",
+            "Legal Consultant",
+            "Law Researcher",
+            "Arbitration Consultant",
+        ):
+            if title not in cleaned:
+                cleaned.append(title)
+    if any(token in cv_lower for token in (
+        "enseignante",
+        "enseignant",
+        "formatrice",
+        "formateur",
+        "formation",
+        "training",
+        "soft skills",
+    )):
+        for title in (
+            "Law Lecturer",
+            "Corporate Trainer",
+            "Employability Trainer",
+            "Human Resources Trainer",
+        ):
+            if title not in cleaned:
+                cleaned.append(title)
+
+    if not cleaned:
+        fallback_titles = [
+            "Consultant",
+            "Specialist",
+            "Analyst",
+            "Coordinator",
+            "Manager",
+        ]
+        for title in fallback_titles:
+            if title not in cleaned:
+                cleaned.append(title)
+
     ordered: list[str] = []
     for title in ROLE_TITLE_FALLBACKS:
         if title in cleaned and title not in ordered:
@@ -433,6 +529,24 @@ def _normalize_role_keywords(keywords: list[str], cv_text: str) -> list[str]:
 
 
 def _canonical_role_title(normalized: str) -> str | None:
+    if any(token in normalized for token in ("law lecturer", "droit", "legal teacher", "enseignante en droit", "enseignant en droit")):
+        return "Law Lecturer"
+    if "legal advisor" in normalized or "legal counsel" in normalized or "juriste" in normalized:
+        return "Legal Advisor"
+    if "legal consultant" in normalized or "consultant juridique" in normalized:
+        return "Legal Consultant"
+    if "law researcher" in normalized or "chercheur juridique" in normalized or "doctorante" in normalized:
+        return "Law Researcher"
+    if "arbitration" in normalized or "arbitre" in normalized:
+        return "Arbitration Consultant"
+    if "corporate trainer" in normalized or "formateur" in normalized or "formatrice" in normalized:
+        return "Corporate Trainer"
+    if "employability" in normalized:
+        return "Employability Trainer"
+    if "human resources trainer" in normalized:
+        return "Human Resources Trainer"
+    if "trainer" in normalized or "instructor" in normalized or "enseignante" in normalized or "enseignant" in normalized:
+        return "Trainer"
     if "sap" in normalized:
         return "SAP Consultant"
     if "full stack" in normalized or "full-stack" in normalized:
