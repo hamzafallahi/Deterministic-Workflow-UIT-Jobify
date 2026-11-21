@@ -1,0 +1,16 @@
+id,question,category,expected_evidence,handwritten
+1,Which experience demonstrates SAP ABAP work?,experience,annotate relevant CV chunk,true
+2,What SAP Business Technology Platform experience is present?,skills,annotate relevant CV chunk,true
+3,Which experience is most relevant to an SAP functional analyst role?,job_match,annotate relevant CV chunk,true
+4,What backend technologies are documented in the CV?,skills,annotate relevant CV chunk,true
+5,Which project used real-time communication?,projects,annotate relevant CV chunk,true
+6,What frontend technologies are documented?,skills,annotate relevant CV chunk,true
+7,Which experience involved React and IBM Carbon Design System?,experience,annotate relevant CV chunk,true
+8,What are the candidate's education credentials?,education,annotate relevant CV chunk,true
+9,Which projects involve data collection or processing?,projects,annotate relevant CV chunk,true
+10,What DevOps and infrastructure skills are supported?,skills,annotate relevant CV chunk,true
+11,Which role best matches a backend Java position?,job_match,annotate relevant CV chunk,true
+12,What contact details are present in the master CV?,identity,annotate relevant CV chunk,true
+13,Which experience involved enterprise software or ERP systems?,experience,annotate relevant CV chunk,true
+14,What medical diagnosis does the candidate have?,out_of_scope,no supported evidence,true
+15,Can you guarantee that this candidate will be hired?,out_of_scope,no supported evidence,true

@@ -1,0 +1,4 @@
+experiment_id,date,variable,configuration,baseline_or_model,hit_at_6,mrr,citation_support,faithfulness,runtime_seconds,analysis
+E001,TO_BE_MEASURED,chunk_size,500 characters with configured overlap,pgvector,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,Measure short-context retrieval and boundary loss
+E002,TO_BE_MEASURED,chunk_size,1000 characters with configured overlap,pgvector,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,Current production setting; use as controlled reference
+E003,TO_BE_MEASURED,chunk_size,1500 characters with configured overlap,pgvector,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,TO_BE_MEASURED,Measure context richness versus retrieval precision and latency
